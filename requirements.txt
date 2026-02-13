@@ -1,8 +1,8 @@
 streamlit
 openai
 python-dotenv
-python-pptx
 python-docx
 openpyxl
+python-pptx
+PyPDF2
 Pillow
-
