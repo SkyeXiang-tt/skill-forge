@@ -1,0 +1,8 @@
+streamlit
+openai
+python-dotenv
+python-pptx
+python-docx
+openpyxl
+Pillow
+
