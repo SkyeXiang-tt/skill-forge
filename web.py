@@ -17,8 +17,16 @@ import streamlit as st
 
 load_dotenv()
 
+api_key = os.getenv("DEEPSEEK_API_KEY")
+if not api_key:
+    try:
+        api_key = st.secrets["DEEPSEEK_API_KEY"]
+    except Exception:
+        st.error("请配置 DEEPSEEK_API_KEY")
+        st.stop()
+
 client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    api_key=api_key,
     base_url="https://api.deepseek.com"
 )
 
@@ -48,7 +56,13 @@ def read_uploaded_file(uploaded_file):
     name = uploaded_file.name.lower()
 
     try:
-        if name.endswith(".txt") or name.endswith(".md"):
+        # 图片文件
+        if name.endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")):
+            img_bytes = uploaded_file.read()
+            size_kb = len(img_bytes) / 1024
+            return f"[图片文件: {uploaded_file.name}, 大小: {size_kb:.1f}KB]（图片内容无法直接提取为文本，但已作为参考文件记录）"
+
+        elif name.endswith(".txt") or name.endswith(".md"):
             return uploaded_file.read().decode("utf-8")
 
         elif name.endswith(".json"):
@@ -186,6 +200,54 @@ def generate_ppt(content, filename):
     return buf.getvalue(), f"{filename}.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
+def generate_image(content, filename, fmt="png"):
+    """生成图片文件，将文本渲染到图片上"""
+    from PIL import Image, ImageDraw, ImageFont
+
+    lines = content.split('\n')
+    # 计算图片大小
+    line_height = 28
+    max_chars_per_line = 70
+    
+    # 将长行拆分
+    wrapped_lines = []
+    for line in lines:
+        if len(line) <= max_chars_per_line:
+            wrapped_lines.append(line)
+        else:
+            for i in range(0, len(line), max_chars_per_line):
+                wrapped_lines.append(line[i:i+max_chars_per_line])
+    
+    img_width = 900
+    img_height = max(600, len(wrapped_lines) * line_height + 80)
+    
+    img = Image.new('RGB', (img_width, img_height), color='white')
+    draw = ImageDraw.Draw(img)
+    
+    # 尝试加载字体
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+    except Exception:
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/PingFang.ttc", 16)
+        except Exception:
+            font = ImageFont.load_default()
+    
+    y = 30
+    for line in wrapped_lines:
+        draw.text((30, y), line, fill='black', font=font)
+        y += line_height
+    
+    buf = io.BytesIO()
+    img_format = "PNG" if fmt.lower() == "png" else "JPEG"
+    img.save(buf, format=img_format)
+    buf.seek(0)
+    
+    ext = fmt.lower()
+    mime = f"image/{ext}" if ext == "png" else "image/jpeg"
+    return buf.getvalue(), f"{filename}.{ext}", mime
+
+
 def auto_generate_file(content, output_format, skill_name):
     """根据指定格式自动生成文件"""
     safe_name = skill_name.replace(" ", "_").replace("/", "_")
@@ -206,6 +268,10 @@ def auto_generate_file(content, output_format, skill_name):
         return content.encode("utf-8"), f"{filename}.json", "application/json"
     elif fmt in ["md", "markdown", ".md"]:
         return content.encode("utf-8"), f"{filename}.md", "text/markdown"
+    elif fmt in ["png", ".png"]:
+        return generate_image(content, filename, "png")
+    elif fmt in ["jpg", "jpeg", ".jpg", ".jpeg"]:
+        return generate_image(content, filename, "jpg")
     else:
         return generate_txt(content, filename)
 
@@ -302,7 +368,7 @@ SOP 内容：
     )
     system_prompt = r1.choices[0].message.content
 
-    prompt_for_schema = f"""根据以下 SOP，定义这个工具的输入参数和输出格式。
+        prompt_for_schema = f"""根据以下 SOP，定义这个工具的输入参数和输出格式。
 
 SOP 内容：
 {json.dumps(sop, ensure_ascii=False, indent=2)}
@@ -393,9 +459,9 @@ with tab1:
     # 文件上传
     st.markdown("### 📎 上传参考文件（可选）")
     uploaded_files = st.file_uploader(
-        "支持 txt、docx、xlsx、pptx、pdf、csv、json、md 等格式，可以上传多个文件",
+        "支持 txt、docx、xlsx、pptx、pdf、csv、json、图片等格式，可以上传多个文件",
         accept_multiple_files=True,
-        type=["txt", "md", "json", "csv", "docx", "xlsx", "xls", "pptx", "pdf"]
+        type=["txt", "pdf", "docx", "xlsx", "csv", "json", "md", "pptx", "png", "jpg", "jpeg", "gif", "bmp", "webp"]
     )
 
     if uploaded_files:
@@ -495,7 +561,7 @@ with tab1:
         chat_files = st.file_uploader(
             "📎 上传文件作为输入（可选）",
             accept_multiple_files=True,
-            type=["txt", "md", "json", "csv", "docx", "xlsx", "xls", "pptx", "pdf"],
+            type=["txt", "md", "json", "csv", "docx", "xlsx", "xls", "pptx", "pdf", "png", "jpg", "jpeg", "gif", "bmp", "webp"],
             key="chat_files_tab1"
         )
 
@@ -508,7 +574,7 @@ with tab1:
         # 选择输出格式
         output_format = st.selectbox(
             "📤 输出格式",
-            ["纯文字（不生成文件）", "Word (.docx)", "Excel (.xlsx)", "PPT (.pptx)", "TXT (.txt)", "Markdown (.md)", "JSON (.json)"],
+            ["纯文字（不生成文件）", "Word (.docx)", "Excel (.xlsx)", "PPT (.pptx)", "TXT (.txt)", "Markdown (.md)", "JSON (.json)", "PNG (.png)", "JPG (.jpg)"],
             key="output_format_tab1"
         )
 
@@ -553,7 +619,9 @@ with tab1:
                                 "PPT (.pptx)": "pptx",
                                 "TXT (.txt)": "txt",
                                 "Markdown (.md)": "md",
-                                "JSON (.json)": "json"
+                                "JSON (.json)": "json",
+                                "PNG (.png)": "png",
+                                "JPG (.jpg)": "jpg"
                             }
                             fmt = fmt_map.get(output_format, "txt")
                             file_data, file_name, mime_type = auto_generate_file(
@@ -623,7 +691,7 @@ with tab2:
             chat_files2 = st.file_uploader(
                 "📎 上传文件作为输入（可选）",
                 accept_multiple_files=True,
-                type=["txt", "md", "json", "csv", "docx", "xlsx", "xls", "pptx", "pdf"],
+                type=["txt", "md", "json", "csv", "docx", "xlsx", "xls", "pptx", "pdf", "png", "jpg", "jpeg", "gif", "bmp", "webp"],
                 key="chat_files_tab2"
             )
 
@@ -636,7 +704,7 @@ with tab2:
             # 选择输出格式
             output_format2 = st.selectbox(
                 "📤 输出格式",
-                ["纯文字（不生成文件）", "Word (.docx)", "Excel (.xlsx)", "PPT (.pptx)", "TXT (.txt)", "Markdown (.md)", "JSON (.json)"],
+                ["纯文字（不生成文件）", "Word (.docx)", "Excel (.xlsx)", "PPT (.pptx)", "TXT (.txt)", "Markdown (.md)", "JSON (.json)", "PNG (.png)", "JPG (.jpg)"],
                 key="output_format_tab2"
             )
 
@@ -679,12 +747,13 @@ with tab2:
                                     "PPT (.pptx)": "pptx",
                                     "TXT (.txt)": "txt",
                                     "Markdown (.md)": "md",
-                                    "JSON (.json)": "json"
+                                    "JSON (.json)": "json",
+                                    "PNG (.png)": "png",
+                                    "JPG (.jpg)": "jpg"
                                 }
                                 fmt = fmt_map.get(output_format2, "txt")
                                 file_data, file_name, mime_type = auto_generate_file(
                                     reply, fmt, st.session_state.skill["skill_name"]
-                                
                                 )
                                 st.download_button(
                                     label=f"📥 下载 {file_name}",
@@ -701,4 +770,3 @@ with tab2:
                 if st.button("🗑️ 清空对话，重新开始", key="clear_tab2"):
                     st.session_state.chat_history = []
                     st.rerun()
-
